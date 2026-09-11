@@ -1,0 +1,29 @@
+apiVersion: tempo.grafana.com/v1alpha1
+kind: TempoStack
+metadata:
+  name: lab
+  namespace: tempo
+spec:
+  storage:
+    secret:
+      name: tempo-minio
+      type: s3
+  storageSize: 1Gi
+  resources:
+    total:
+      limits:
+        memory: 2Gi
+        cpu: 2000m
+  tenants:
+    mode: openshift
+    authentication:
+      - tenantName: dev
+        tenantId: "3d4bc7c5-9653-44e8-b8ae-99d2dda524ae"
+  template:
+    gateway:
+      enabled: true
+      rbac:
+        enabled: true
+    queryFrontend:
+      jaegerQuery:
+        enabled: false

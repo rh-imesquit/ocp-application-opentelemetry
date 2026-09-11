@@ -32,8 +32,8 @@ spec:
           env:
             - name: DOCUMENTROOT
               value: /public
-
-            # OpenTelemetry PHP upstream
+            - name: PHP_CLEAR_ENV
+              value: "OFF"
             - name: OTEL_PHP_AUTOLOAD_ENABLED
               value: "true"
             - name: OTEL_SERVICE_NAME
