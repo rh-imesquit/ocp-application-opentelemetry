@@ -1,0 +1,11 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: php-demo
+  namespace: php-observability-demo
+  labels:
+    app.kubernetes.io/name: php-demo
+    app.kubernetes.io/part-of: php-observability-lab
+spec:
+  lookupPolicy:
+    local: false

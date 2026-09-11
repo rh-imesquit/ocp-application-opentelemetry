@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: php-demo
+  namespace: php-observability-demo
+  labels:
+    app: php-demo
+    app.kubernetes.io/name: php-demo
+    app.kubernetes.io/part-of: php-observability-lab
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"php-demo:latest","namespace":"php-observability-demo"},"fieldPath":"spec.template.spec.containers[?(@.name==\"php-demo\")].image","paused":false}]'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: php-demo
+  template:
+    metadata:
+      labels:
+        app: php-demo
+        app.kubernetes.io/name: php-demo
+        app.kubernetes.io/part-of: php-observability-lab
+    spec:
+      containers:
+        - name: php-demo
+          image: image-registry.openshift-image-registry.svc:5000/php-observability-demo/php-demo:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: DOCUMENTROOT
+              value: /public
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      terminationGracePeriodSeconds: 30

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: php-demo
+  namespace: php-observability-demo
+  labels:
+    app: php-demo
+    app.kubernetes.io/name: php-demo
+    app.kubernetes.io/part-of: php-observability-lab
+spec:
+  type: ClusterIP
+  selector:
+    app: php-demo
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

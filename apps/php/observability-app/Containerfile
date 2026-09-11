@@ -1,0 +1,16 @@
+FROM registry.access.redhat.com/ubi9/php-83:latest
+
+ENV DOCUMENTROOT=/public \
+    COMPOSER_ARGS="--no-dev --optimize-autoloader"
+
+USER 0
+
+COPY --chown=1001:0 . /tmp/src
+
+USER 1001
+
+RUN /usr/libexec/s2i/assemble
+
+EXPOSE 8080
+
+CMD ["/usr/libexec/s2i/run"]

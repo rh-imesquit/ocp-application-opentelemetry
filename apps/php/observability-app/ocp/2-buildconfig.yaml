@@ -1,0 +1,23 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: php-demo
+  namespace: php-observability-demo
+  labels:
+    app.kubernetes.io/name: php-demo
+    app.kubernetes.io/part-of: php-observability-lab
+spec:
+  runPolicy: Serial
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile
+      forcePull: true
+  output:
+    to:
+      kind: ImageStreamTag
+      name: php-demo:latest
+  triggers: []
