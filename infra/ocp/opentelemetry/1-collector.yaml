@@ -5,19 +5,28 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/part-of: php-observability-lab
+
 spec:
   mode: deployment
+
+  serviceAccount: otel-collector
 
   observability:
     metrics:
       enableMetrics: true
 
   config:
+
+    extensions:
+      bearertokenauth:
+        filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+
     receivers:
       otlp:
         protocols:
           grpc:
             endpoint: 0.0.0.0:4317
+
           http:
             endpoint: 0.0.0.0:4318
 
@@ -26,19 +35,48 @@ spec:
         check_interval: 1s
         limit_percentage: 75
         spike_limit_percentage: 15
+
       batch: {}
 
     exporters:
+
+      # Mantido durante o laboratório para facilitar a validação
+      # dos spans diretamente nos logs do Collector.
       debug:
         verbosity: detailed
 
+      # Encaminhamento dos traces para o TempoStack.
+      otlp_grpc/tempo:
+        endpoint: tempo-lab-gateway.tempo.svc.cluster.local:8090
+
+        tls:
+          insecure: false
+
+          # Utilizado nesta etapa do laboratório para simplificar
+          # a validação do certificado interno do gateway Tempo.
+          insecure_skip_verify: true
+
+        auth:
+          authenticator: bearertokenauth
+
+        headers:
+          X-Scope-OrgID: dev
+
     service:
+
+      extensions:
+        - bearertokenauth
+
       pipelines:
+
         traces:
           receivers:
             - otlp
+
           processors:
             - memory_limiter
             - batch
+
           exporters:
             - debug
+            - otlp_grpc/tempo
