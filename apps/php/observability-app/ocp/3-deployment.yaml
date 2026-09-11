@@ -32,6 +32,25 @@ spec:
           env:
             - name: DOCUMENTROOT
               value: /public
+
+            # OpenTelemetry PHP upstream
+            - name: OTEL_PHP_AUTOLOAD_ENABLED
+              value: "true"
+            - name: OTEL_SERVICE_NAME
+              value: php-demo
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: http/protobuf
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4318
+            - name: OTEL_PROPAGATORS
+              value: baggage,tracecontext
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=php-observability-demo
+            - name: OTEL_PHP_LOG_DESTINATION
+              value: stderr
+
           startupProbe:
             httpGet:
               path: /health

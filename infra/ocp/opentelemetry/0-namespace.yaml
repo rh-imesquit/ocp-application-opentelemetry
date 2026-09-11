@@ -1,0 +1,6 @@
+apiVersion: project.openshift.io/v1
+kind: Project
+metadata:
+  name: observability
+  labels:
+    app.kubernetes.io/part-of: php-observability-lab
