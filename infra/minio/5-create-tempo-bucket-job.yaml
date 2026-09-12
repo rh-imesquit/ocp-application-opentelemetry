@@ -1,35 +1,51 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: minio-create-tempo-bucket
+  name: create-tempo-bucket
   namespace: minio
 spec:
-  backoffLimit: 6
+  backoffLimit: 3
+
   template:
+    metadata:
+      labels:
+        app: create-tempo-bucket
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
+
       containers:
         - name: mc
           image: quay.io/minio/mc:latest
-          imagePullPolicy: IfNotPresent
+
           env:
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:
                   name: minio-root-credentials
                   key: MINIO_ROOT_USER
+
             - name: MINIO_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: minio-root-credentials
                   key: MINIO_ROOT_PASSWORD
-          command: ["/bin/sh", "-ec"]
-          args:
+
+          command:
+            - /bin/sh
+            - -ec
             - |
-              until mc alias set lab http://minio.minio.svc.cluster.local:9000 \
-                "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"; do
-                echo "Aguardando MinIO..."
-                sleep 5
-              done
-              mc mb --ignore-existing lab/tempo
+              echo "Configurando conexão com MinIO..."
+
+              mc alias set lab \
+                http://minio.minio.svc.cluster.local:9000 \
+                "${MINIO_ROOT_USER}" \
+                "${MINIO_ROOT_PASSWORD}"
+
+              echo "Criando bucket tempo..."
+
+              mc mb \
+                --ignore-existing \
+                lab/tempo
+
+              echo "Buckets existentes:"
               mc ls lab

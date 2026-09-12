@@ -1,0 +1,215 @@
+---
+- name: Destroy OpenTelemetry observability lab
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/all/vault.yml"
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - manifests is defined
+          - php_namespace is defined
+          - observability_namespace is defined
+          - tempo_namespace is defined
+          - minio_namespace is defined
+          - destroy_operators is defined
+          - destroy_monitoring_config is defined
+        fail_msg: "Required Ansible variables were not loaded."
+        success_msg: "Required Ansible variables loaded successfully."
+
+    - name: Validate access to the current OpenShift/Kubernetes context
+      kubernetes.core.k8s_cluster_info:
+      register: cluster_info
+
+    - name: Show target API server
+      ansible.builtin.debug:
+        msg: >-
+          Destroying lab resources from cluster API:
+          {{ cluster_info.connection.host | default('current kubeconfig context') }}
+
+  tasks:
+    - name: Remove PHP application resources
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 120
+      loop: "{{ manifests.app }}"
+      ignore_errors: true
+
+    - name: Remove PHP application namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ php_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 180
+      ignore_errors: true
+
+    - name: Remove Distributed Tracing UIPlugin
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 120
+      loop: "{{ manifests.cluster_observability }}"
+      ignore_errors: true
+
+    - name: Remove OpenTelemetry RBAC, ServiceAccount and Collector
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 180
+      loop: "{{ manifests.opentelemetry }}"
+      ignore_errors: true
+
+    - name: Remove observability namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ observability_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 180
+      ignore_errors: true
+
+    - name: Remove Tempo RBAC and TempoStack
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 240
+      loop: "{{ manifests.tempo }}"
+      ignore_errors: true
+
+    - name: Remove Tempo namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ tempo_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 240
+      ignore_errors: true
+
+    - name: Remove MinIO resources
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 180
+      loop: "{{ manifests.minio }}"
+      ignore_errors: true
+
+    - name: Remove MinIO namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ minio_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 240
+      ignore_errors: true
+
+    - name: Remove Cluster Observability Operator resources
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 180
+      loop: "{{ manifests.operators.cluster_observability }}"
+      when: destroy_operators | bool
+      ignore_errors: true
+
+    - name: Remove Cluster Observability Operator namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ cluster_observability_operator_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 240
+      when: destroy_operators | bool
+      ignore_errors: true
+
+    - name: Remove OpenTelemetry Operator resources
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 180
+      loop: "{{ manifests.operators.opentelemetry }}"
+      when: destroy_operators | bool
+      ignore_errors: true
+
+    - name: Remove OpenTelemetry Operator namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ opentelemetry_operator_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 240
+      when: destroy_operators | bool
+      ignore_errors: true
+
+    - name: Remove Tempo Operator resources
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 180
+      loop: "{{ manifests.operators.tempo }}"
+      when: destroy_operators | bool
+      ignore_errors: true
+
+    - name: Remove Tempo Operator namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ tempo_operator_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 240
+      when: destroy_operators | bool
+      ignore_errors: true
+
+    - name: Remove User Workload Monitoring configuration created by the lab
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ item }}"
+        wait: true
+        wait_timeout: 120
+      loop: "{{ manifests.monitoring }}"
+      when: destroy_monitoring_config | bool
+      ignore_errors: true
+
+  post_tasks:
+    - name: Show remaining lab namespaces
+      ansible.builtin.command:
+        cmd: >
+          oc get namespace
+          {{ php_namespace }}
+          {{ observability_namespace }}
+          {{ tempo_namespace }}
+          {{ minio_namespace }}
+          {{ cluster_observability_operator_namespace }}
+          {{ opentelemetry_operator_namespace }}
+          {{ tempo_operator_namespace }}
+          --ignore-not-found
+      register: remaining_namespaces
+      changed_when: false
+      failed_when: false
+
+    - name: Destroy summary
+      ansible.builtin.debug:
+        msg: >-
+          Destroy completed.
+          Remaining matching namespaces:
+          {{ remaining_namespaces.stdout | default('none') }}

@@ -1,0 +1,730 @@
+---
+- name: Provision OpenTelemetry observability lab
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/all/vars.yml"
+    - "{{ playbook_dir }}/../group_vars/all/vault.yml"
+
+  vars:
+    # -----------------------------------------------------------------------
+    # Resource names used by the current lab manifests.
+    # -----------------------------------------------------------------------
+    minio_deployment_name: minio
+    minio_service_name: minio
+    minio_bucket_job_name: create-tempo-bucket
+    minio_legacy_bucket_job_name: minio-create-tempo-bucket
+
+    otel_collector_deployment_name: otel-collector
+
+    php_buildconfig_name: php-demo
+    php_deployment_name: php-demo
+    php_route_name: php-demo
+
+    # Tempo -> MinIO endpoint.
+    minio_endpoint: "http://minio.minio.svc.cluster.local:9000"
+
+    # Operator readiness polling.
+    operator_wait_retries: 90
+    operator_wait_delay: 5
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - repo_root is defined
+          - php_namespace is defined
+          - observability_namespace is defined
+          - tempo_namespace is defined
+          - minio_namespace is defined
+          - tempo_stack_name is defined
+          - tempo_tenant_name is defined
+          - tempo_bucket_name is defined
+          - ui_plugin_name is defined
+          - minio_root_secret_name is defined
+          - tempo_storage_secret_name is defined
+          - cluster_observability_operator_namespace is defined
+          - opentelemetry_operator_namespace is defined
+          - tempo_operator_namespace is defined
+          - vault_minio_root_user is defined
+          - vault_minio_root_password is defined
+          - vault_minio_root_user | length > 0
+          - vault_minio_root_password | length > 0
+          - vault_minio_root_user != 'CHANGE_ME'
+          - vault_minio_root_password != 'CHANGE_ME'
+        fail_msg: >-
+          Required variables were not loaded or the Vault still contains
+          placeholder credentials.
+        success_msg: "Required variables and Vault credentials loaded successfully."
+
+    - name: Validate access to the current OpenShift/Kubernetes context
+      kubernetes.core.k8s_cluster_info:
+      register: cluster_info
+
+    - name: Show target API server
+      ansible.builtin.debug:
+        msg: >-
+          Provisioning the lab on cluster API:
+          {{ cluster_info.connection.host | default('current kubeconfig context') }}
+
+    - name: Validate OpenShift CLI is available
+      ansible.builtin.command:
+        cmd: oc version --client
+      changed_when: false
+
+    - name: Validate logged-in OpenShift user
+      ansible.builtin.command:
+        cmd: oc whoami
+      register: oc_user
+      changed_when: false
+
+    - name: Show OpenShift user
+      ansible.builtin.debug:
+        msg: "Authenticated OpenShift user: {{ oc_user.stdout }}"
+
+  tasks:
+    # =======================================================================
+    # 1. USER WORKLOAD MONITORING
+    # =======================================================================
+    - name: Enable User Workload Monitoring
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ repo_root }}/infra/ocp/monitoring/cluster-monitoring-config.yaml"
+      tags:
+        - monitoring
+
+    - name: Wait for User Workload Monitoring namespace
+      ansible.builtin.command:
+        cmd: oc get namespace openshift-user-workload-monitoring
+      register: uwm_namespace
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: uwm_namespace.rc == 0
+      tags:
+        - monitoring
+
+    # =======================================================================
+    # 2. OPERATORS
+    # =======================================================================
+    - name: Install Red Hat build of OpenTelemetry Operator
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - "{{ repo_root }}/infra/ocp/operators/opentelemetry/0-namespace.yaml"
+        - "{{ repo_root }}/infra/ocp/operators/opentelemetry/1-operatorgroup.yaml"
+        - "{{ repo_root }}/infra/ocp/operators/opentelemetry/2-subscription.yaml"
+      tags:
+        - operators
+        - opentelemetry
+
+    - name: Install Tempo Operator
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - "{{ repo_root }}/infra/ocp/operators/tempo/0-namespace.yaml"
+        - "{{ repo_root }}/infra/ocp/operators/tempo/1-operatorgroup.yaml"
+        - "{{ repo_root }}/infra/ocp/operators/tempo/2-subscription.yaml"
+      tags:
+        - operators
+        - tempo
+
+    - name: Install Cluster Observability Operator
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - "{{ repo_root }}/infra/ocp/operators/cluster-observability/0-namespace.yaml"
+        - "{{ repo_root }}/infra/ocp/operators/cluster-observability/1-operatorgroup.yaml"
+        - "{{ repo_root }}/infra/ocp/operators/cluster-observability/2-subscription.yaml"
+      tags:
+        - operators
+        - coo
+
+    - name: Wait for Red Hat build of OpenTelemetry Operator CSV
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          csv="$(oc get subscription opentelemetry-product \
+            -n {{ opentelemetry_operator_namespace }} \
+            -o jsonpath='{.status.installedCSV}')"
+          test -n "${csv}"
+          phase="$(oc get csv "${csv}" \
+            -n {{ opentelemetry_operator_namespace }} \
+            -o jsonpath='{.status.phase}')"
+          echo "${csv}: ${phase}"
+          test "${phase}" = "Succeeded"
+        executable: /bin/bash
+      register: otel_operator_status
+      changed_when: false
+      retries: "{{ operator_wait_retries }}"
+      delay: "{{ operator_wait_delay }}"
+      until: otel_operator_status.rc == 0
+      tags:
+        - operators
+        - opentelemetry
+
+    - name: Wait for Tempo Operator CSV
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          csv="$(oc get subscription tempo-product \
+            -n {{ tempo_operator_namespace }} \
+            -o jsonpath='{.status.installedCSV}')"
+          test -n "${csv}"
+          phase="$(oc get csv "${csv}" \
+            -n {{ tempo_operator_namespace }} \
+            -o jsonpath='{.status.phase}')"
+          echo "${csv}: ${phase}"
+          test "${phase}" = "Succeeded"
+        executable: /bin/bash
+      register: tempo_operator_status
+      changed_when: false
+      retries: "{{ operator_wait_retries }}"
+      delay: "{{ operator_wait_delay }}"
+      until: tempo_operator_status.rc == 0
+      tags:
+        - operators
+        - tempo
+
+    - name: Wait for Cluster Observability Operator CSV
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          csv="$(oc get subscription cluster-observability-operator \
+            -n {{ cluster_observability_operator_namespace }} \
+            -o jsonpath='{.status.installedCSV}')"
+          test -n "${csv}"
+          phase="$(oc get csv "${csv}" \
+            -n {{ cluster_observability_operator_namespace }} \
+            -o jsonpath='{.status.phase}')"
+          echo "${csv}: ${phase}"
+          test "${phase}" = "Succeeded"
+        executable: /bin/bash
+      register: coo_operator_status
+      changed_when: false
+      retries: "{{ operator_wait_retries }}"
+      delay: "{{ operator_wait_delay }}"
+      until: coo_operator_status.rc == 0
+      tags:
+        - operators
+        - coo
+
+    - name: Wait for required CRDs
+      ansible.builtin.command:
+        cmd: "oc get crd {{ item }}"
+      loop:
+        - opentelemetrycollectors.opentelemetry.io
+        - tempostacks.tempo.grafana.com
+        - uiplugins.observability.openshift.io
+      register: required_crds
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: required_crds.rc == 0
+      tags:
+        - operators
+
+    # =======================================================================
+    # 3. MINIO
+    # =======================================================================
+    - name: Create MinIO namespace
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ repo_root }}/infra/minio/0-namespace.yaml"
+      tags:
+        - minio
+
+    - name: Create MinIO root credentials Secret from Ansible Vault
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ minio_root_secret_name }}"
+            namespace: "{{ minio_namespace }}"
+          type: Opaque
+          stringData:
+            MINIO_ROOT_USER: "{{ vault_minio_root_user }}"
+            MINIO_ROOT_PASSWORD: "{{ vault_minio_root_password }}"
+      no_log: true
+      tags:
+        - minio
+
+    - name: Deploy MinIO PVC, Deployment, Service and Route
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - "{{ repo_root }}/infra/minio/1-pvc.yaml"
+        - "{{ repo_root }}/infra/minio/2-deployment.yaml"
+        - "{{ repo_root }}/infra/minio/3-service.yaml"
+        - "{{ repo_root }}/infra/minio/4-console-route.yaml"
+      tags:
+        - minio
+
+    - name: Wait for MinIO Deployment
+      ansible.builtin.command:
+        cmd: >-
+          oc rollout status deployment/{{ minio_deployment_name }}
+          -n {{ minio_namespace }}
+          --timeout=300s
+      register: minio_rollout
+      changed_when: false
+      retries: 6
+      delay: 10
+      until: minio_rollout.rc == 0
+      tags:
+        - minio
+
+    - name: Remove previous Tempo bucket creation Jobs
+      kubernetes.core.k8s:
+        api_version: batch/v1
+        kind: Job
+        name: "{{ item }}"
+        namespace: "{{ minio_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 120
+      loop:
+        - "{{ minio_bucket_job_name }}"
+        - "{{ minio_legacy_bucket_job_name }}"
+      tags:
+        - minio
+
+    - name: Create Tempo bucket in MinIO
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "{{ minio_bucket_job_name }}"
+            namespace: "{{ minio_namespace }}"
+            labels:
+              app.kubernetes.io/name: minio-bucket-init
+              app.kubernetes.io/part-of: php-observability-lab
+          spec:
+            backoffLimit: 3
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: minio-bucket-init
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: mc
+                    image: quay.io/minio/mc:latest
+                    env:
+                      - name: MINIO_ROOT_USER
+                        valueFrom:
+                          secretKeyRef:
+                            name: "{{ minio_root_secret_name }}"
+                            key: MINIO_ROOT_USER
+                      - name: MINIO_ROOT_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: "{{ minio_root_secret_name }}"
+                            key: MINIO_ROOT_PASSWORD
+                      - name: TEMPO_BUCKET
+                        value: "{{ tempo_bucket_name }}"
+                    command:
+                      - /bin/sh
+                      - -ec
+                      - |
+                        MC_CONFIG_DIR="/tmp/mc"
+
+                        echo "Configuring MinIO alias..."
+
+                        mc --config-dir "${MC_CONFIG_DIR}" alias set lab \
+                          http://minio.minio.svc.cluster.local:9000 \
+                          "${MINIO_ROOT_USER}" \
+                          "${MINIO_ROOT_PASSWORD}"
+
+                        echo "Creating Tempo bucket if necessary..."
+
+                        mc --config-dir "${MC_CONFIG_DIR}" \
+                          mb --ignore-existing \
+                          "lab/${TEMPO_BUCKET}"
+
+                        echo "Available buckets:"
+
+                        mc --config-dir "${MC_CONFIG_DIR}" \
+                          ls lab
+      tags:
+        - minio
+
+    - name: Wait for Tempo bucket creation Job
+      ansible.builtin.command:
+        cmd: >-
+          oc wait
+          --for=condition=Complete
+          job/{{ minio_bucket_job_name }}
+          -n {{ minio_namespace }}
+          --timeout=180s
+      register: bucket_job_status
+      changed_when: false
+      tags:
+        - minio
+
+    - name: Read Tempo bucket creation logs
+      ansible.builtin.command:
+        cmd: >-
+          oc logs
+          job/{{ minio_bucket_job_name }}
+          -n {{ minio_namespace }}
+      register: bucket_job_logs
+      changed_when: false
+      tags:
+        - minio
+
+    - name: Show Tempo bucket creation logs
+      ansible.builtin.debug:
+        var: bucket_job_logs.stdout_lines
+      tags:
+        - minio
+
+    - name: Validate Tempo bucket was listed by MinIO client
+      ansible.builtin.assert:
+        that:
+          - tempo_bucket_name in bucket_job_logs.stdout
+        fail_msg: >-
+          The bucket creation Job completed, but bucket
+          '{{ tempo_bucket_name }}' was not found in its output.
+        success_msg: "Tempo bucket '{{ tempo_bucket_name }}' is available."
+      tags:
+        - minio
+
+    # =======================================================================
+    # 4. TEMPOSTACK
+    # =======================================================================
+    - name: Create Tempo namespace
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ repo_root }}/infra/ocp/tempo/0-namespace.yaml"
+      tags:
+        - tempo
+
+    - name: Create Tempo MinIO storage Secret from Ansible Vault
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ tempo_storage_secret_name }}"
+            namespace: "{{ tempo_namespace }}"
+          type: Opaque
+          stringData:
+            endpoint: "{{ minio_endpoint }}"
+            bucket: "{{ tempo_bucket_name }}"
+            access_key_id: "{{ vault_minio_root_user }}"
+            access_key_secret: "{{ vault_minio_root_password }}"
+      no_log: true
+      tags:
+        - tempo
+
+    - name: Deploy TempoStack and trace read RBAC
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - "{{ repo_root }}/infra/ocp/tempo/1-tempostack.yaml"
+        - "{{ repo_root }}/infra/ocp/tempo/2-rbac-read.yaml"
+      tags:
+        - tempo
+
+    - name: Wait for TempoStack Ready=True
+      ansible.builtin.shell:
+        cmd: |
+          status="$(oc get tempostack {{ tempo_stack_name }} \
+            -n {{ tempo_namespace }} \
+            -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')"
+          echo "${status}"
+          test "${status}" = "True"
+        executable: /bin/bash
+      register: tempostack_ready
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: tempostack_ready.rc == 0
+      tags:
+        - tempo
+
+    - name: Show Tempo pods
+      ansible.builtin.command:
+        cmd: oc get pods -n {{ tempo_namespace }}
+      register: tempo_pods
+      changed_when: false
+      tags:
+        - tempo
+
+    - name: Display Tempo pod status
+      ansible.builtin.debug:
+        var: tempo_pods.stdout_lines
+      tags:
+        - tempo
+
+    # =======================================================================
+    # 5. OPENTELEMETRY COLLECTOR
+    # =======================================================================
+    - name: Create observability namespace
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ repo_root }}/infra/ocp/opentelemetry/0-namespace.yaml"
+      tags:
+        - opentelemetry
+
+    - name: Deploy Collector ServiceAccount and Tempo write RBAC
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - "{{ repo_root }}/infra/ocp/opentelemetry/2-serviceaccount-tempo.yaml"
+        - "{{ repo_root }}/infra/ocp/opentelemetry/3-rbac-tempo-write.yaml"
+      tags:
+        - opentelemetry
+
+    - name: Deploy Red Hat build of OpenTelemetry Collector
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ repo_root }}/infra/ocp/opentelemetry/1-collector.yaml"
+      tags:
+        - opentelemetry
+
+    - name: Wait for OpenTelemetry Collector Deployment
+      ansible.builtin.command:
+        cmd: >-
+          oc rollout status deployment/{{ otel_collector_deployment_name }}
+          -n {{ observability_namespace }}
+          --timeout=300s
+      register: collector_rollout
+      changed_when: false
+      retries: 6
+      delay: 10
+      until: collector_rollout.rc == 0
+      tags:
+        - opentelemetry
+
+    - name: Verify Collector has Tempo exporter configured
+      ansible.builtin.shell:
+        cmd: |
+          oc get opentelemetrycollector otel \
+            -n {{ observability_namespace }} \
+            -o yaml | grep -q 'otlp_grpc/tempo'
+        executable: /bin/bash
+      changed_when: false
+      tags:
+        - opentelemetry
+
+    # =======================================================================
+    # 6. PHP APPLICATION + BINARY BUILD
+    # =======================================================================
+    - name: Create PHP application namespace
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ repo_root }}/apps/php/observability-app/ocp/0-namespace.yaml"
+      tags:
+        - application
+
+    - name: Create PHP ImageStream and BuildConfig
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - "{{ repo_root }}/apps/php/observability-app/ocp/1-imagestream.yaml"
+        - "{{ repo_root }}/apps/php/observability-app/ocp/2-buildconfig.yaml"
+      tags:
+        - application
+        - build
+
+    - name: Start PHP binary build
+      ansible.builtin.command:
+        cmd: >-
+          oc start-build {{ php_buildconfig_name }}
+          -n {{ php_namespace }}
+          --from-dir={{ repo_root }}/apps/php/observability-app
+          --follow
+          --wait
+      register: php_build
+      changed_when: true
+      tags:
+        - application
+        - build
+
+    - name: Deploy PHP application
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - "{{ repo_root }}/apps/php/observability-app/ocp/3-deployment.yaml"
+        - "{{ repo_root }}/apps/php/observability-app/ocp/4-service.yaml"
+        - "{{ repo_root }}/apps/php/observability-app/ocp/5-route.yaml"
+      tags:
+        - application
+
+    - name: Wait for PHP application Deployment
+      ansible.builtin.command:
+        cmd: >-
+          oc rollout status deployment/{{ php_deployment_name }}
+          -n {{ php_namespace }}
+          --timeout=300s
+      register: php_rollout
+      changed_when: false
+      retries: 6
+      delay: 10
+      until: php_rollout.rc == 0
+      tags:
+        - application
+
+    # =======================================================================
+    # 7. CLUSTER OBSERVABILITY / DISTRIBUTED TRACING UI
+    # =======================================================================
+    - name: Enable Distributed Tracing UIPlugin
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ repo_root }}/infra/ocp/cluster-observability/ui-plugin-distributed-tracing.yaml"
+      tags:
+        - coo
+
+    - name: Validate Distributed Tracing UIPlugin
+      ansible.builtin.command:
+        cmd: oc get uiplugin {{ ui_plugin_name }}
+      register: uiplugin_status
+      changed_when: false
+      retries: 20
+      delay: 5
+      until: uiplugin_status.rc == 0
+      tags:
+        - coo
+
+    # =======================================================================
+    # 8. END-TO-END TEST
+    # =======================================================================
+    - name: Obtain PHP application Route
+      ansible.builtin.command:
+        cmd: >-
+          oc get route {{ php_route_name }}
+          -n {{ php_namespace }}
+          -o jsonpath=https://{.spec.host}
+      register: php_route
+      changed_when: false
+      retries: 20
+      delay: 3
+      until:
+        - php_route.rc == 0
+        - php_route.stdout | length > 0
+      tags:
+        - test
+
+    - name: Generate application spans
+      ansible.builtin.uri:
+        url: "{{ php_route.stdout }}{{ item.path }}"
+        method: GET
+        validate_certs: false
+        status_code: "{{ item.status }}"
+        return_content: false
+      loop:
+        - path: /users
+          status: 200
+        - path: /slow
+          status: 200
+        - path: /error
+          status: 500
+      register: span_requests
+      tags:
+        - test
+
+    - name: Wait until application spans reach Collector debug exporter
+      ansible.builtin.command:
+        cmd: >-
+          oc logs deployment/{{ otel_collector_deployment_name }}
+          -n {{ observability_namespace }}
+          --tail=1500
+      register: collector_logs
+      changed_when: false
+      retries: 12
+      delay: 5
+      until:
+        - "'GET /slow' in collector_logs.stdout"
+        - "'php-demo' in collector_logs.stdout"
+      tags:
+        - test
+
+    - name: Check Collector for Tempo export errors
+      ansible.builtin.shell:
+        cmd: |
+          oc logs deployment/{{ otel_collector_deployment_name }} \
+            -n {{ observability_namespace }} \
+            --tail=1000 2>&1 | \
+          grep -iE 'unauthorized|forbidden|permission denied|export.*failed|failed.*export|no such bucket|access denied' || true
+        executable: /bin/bash
+      register: collector_export_errors
+      changed_when: false
+      tags:
+        - test
+
+    - name: Fail when Collector has Tempo export errors
+      ansible.builtin.assert:
+        that:
+          - collector_export_errors.stdout | trim | length == 0
+        fail_msg: >-
+          The Collector received application spans, but Tempo export-related
+          errors were found:
+          {{ collector_export_errors.stdout }}
+        success_msg: "No Tempo export errors were detected in Collector logs."
+      tags:
+        - test
+
+  post_tasks:
+    - name: Collect final lab status
+      ansible.builtin.shell:
+        cmd: |
+          echo "=== Operators ==="
+          oc get csv -A | grep -E 'cluster-observability|opentelemetry|tempo' || true
+
+          echo
+          echo "=== MinIO ==="
+          oc get pods -n {{ minio_namespace }}
+          oc get job {{ minio_bucket_job_name }} -n {{ minio_namespace }}
+
+          echo
+          echo "=== Tempo ==="
+          oc get tempostack {{ tempo_stack_name }} -n {{ tempo_namespace }}
+          oc get pods -n {{ tempo_namespace }}
+
+          echo
+          echo "=== OpenTelemetry ==="
+          oc get opentelemetrycollector otel -n {{ observability_namespace }}
+          oc get pods -n {{ observability_namespace }}
+
+          echo
+          echo "=== Application ==="
+          oc get pods -n {{ php_namespace }}
+          oc get route {{ php_route_name }} -n {{ php_namespace }}
+
+          echo
+          echo "=== COO UIPlugin ==="
+          oc get uiplugin {{ ui_plugin_name }}
+        executable: /bin/bash
+      register: final_status
+      changed_when: false
+
+    - name: Display final lab status
+      ansible.builtin.debug:
+        var: final_status.stdout_lines
+
+    - name: Installation completed
+      ansible.builtin.debug:
+        msg:
+          - "Lab provisioning completed successfully."
+          - "Application: {{ php_route.stdout }}"
+          - "Test spans generated for /users, /slow and /error."
+          - "OpenShift Console: Observe -> Traces"
+          - "Tempo instance: {{ tempo_namespace }} / {{ tempo_stack_name }}"
+          - "Tenant: {{ tempo_tenant_name }}"
+          - "Filter by Service Name: php-demo"

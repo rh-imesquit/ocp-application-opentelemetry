@@ -1,0 +1,76 @@
+---
+# Caminho da raiz do repositório.
+repo_root: "{{ playbook_dir }}/../.."
+
+# Namespaces do laboratório.
+php_namespace: php-observability-demo
+observability_namespace: observability
+tempo_namespace: tempo
+minio_namespace: minio
+
+# Namespaces dos Operators.
+cluster_observability_operator_namespace: openshift-cluster-observability-operator
+opentelemetry_operator_namespace: openshift-opentelemetry-operator
+tempo_operator_namespace: openshift-tempo-operator
+
+# Recursos principais.
+php_app_name: php-demo
+otel_collector_name: otel
+tempo_stack_name: lab
+tempo_tenant_name: dev
+tempo_bucket_name: tempo
+ui_plugin_name: distributed-tracing
+
+# Secrets.
+minio_root_secret_name: minio-root-credentials
+tempo_storage_secret_name: tempo-minio
+
+# Credenciais lidas do vault.yml.
+minio_root_user: "{{ vault_minio_root_user }}"
+minio_root_password: "{{ vault_minio_root_password }}"
+
+# Controle do destroy.
+destroy_operators: true
+destroy_monitoring_config: true
+
+# Manifests usados pelo laboratório.
+manifests:
+  app:
+    - "{{ repo_root }}/apps/php/observability-app/ocp/5-route.yaml"
+    - "{{ repo_root }}/apps/php/observability-app/ocp/4-service.yaml"
+    - "{{ repo_root }}/apps/php/observability-app/ocp/3-deployment.yaml"
+    - "{{ repo_root }}/apps/php/observability-app/ocp/2-buildconfig.yaml"
+    - "{{ repo_root }}/apps/php/observability-app/ocp/1-imagestream.yaml"
+
+  cluster_observability:
+    - "{{ repo_root }}/infra/ocp/cluster-observability/ui-plugin-distributed-tracing.yaml"
+
+  opentelemetry:
+    - "{{ repo_root }}/infra/ocp/opentelemetry/3-rbac-tempo-write.yaml"
+    - "{{ repo_root }}/infra/ocp/opentelemetry/2-serviceaccount-tempo.yaml"
+    - "{{ repo_root }}/infra/ocp/opentelemetry/1-collector.yaml"
+
+  tempo:
+    - "{{ repo_root }}/infra/ocp/tempo/2-rbac-read.yaml"
+    - "{{ repo_root }}/infra/ocp/tempo/1-tempostack.yaml"
+
+  minio:
+    - "{{ repo_root }}/infra/minio/5-create-tempo-bucket-job.yaml"
+    - "{{ repo_root }}/infra/minio/4-console-route.yaml"
+    - "{{ repo_root }}/infra/minio/3-service.yaml"
+    - "{{ repo_root }}/infra/minio/2-deployment.yaml"
+    - "{{ repo_root }}/infra/minio/1-pvc.yaml"
+
+  monitoring:
+    - "{{ repo_root }}/infra/ocp/monitoring/cluster-monitoring-config.yaml"
+
+  operators:
+    cluster_observability:
+      - "{{ repo_root }}/infra/ocp/operators/cluster-observability/2-subscription.yaml"
+      - "{{ repo_root }}/infra/ocp/operators/cluster-observability/1-operatorgroup.yaml"
+    opentelemetry:
+      - "{{ repo_root }}/infra/ocp/operators/opentelemetry/2-subscription.yaml"
+      - "{{ repo_root }}/infra/ocp/operators/opentelemetry/1-operatorgroup.yaml"
+    tempo:
+      - "{{ repo_root }}/infra/ocp/operators/tempo/2-subscription.yaml"
+      - "{{ repo_root }}/infra/ocp/operators/tempo/1-operatorgroup.yaml"
