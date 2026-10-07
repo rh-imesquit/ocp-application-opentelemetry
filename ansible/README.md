@@ -26,6 +26,17 @@ ansible/
 - Python com dependências Kubernetes disponíveis
 - Collection `kubernetes.core`
 
+Crie o ambiente virtual (caso ainda não exista)
+python3 -m venv .venv
+
+Ative o venv
+source .venv/bin/activate
+
+Atualize o pip e instale as dependências necessárias para o Ansible/Kubernetes
+pip install --upgrade pip
+pip install ansible kubernetes
+
+
 Instale a collection:
 
 ```bash

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: python-demo
+  namespace: python-observability-demo
+  labels:
+    app: python-demo
+    app.kubernetes.io/name: python-demo
+    app.kubernetes.io/part-of: python-observability-lab
+spec:
+  type: ClusterIP
+  selector:
+    app: python-demo
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

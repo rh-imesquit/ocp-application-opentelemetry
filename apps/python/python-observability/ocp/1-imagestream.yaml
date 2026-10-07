@@ -1,0 +1,11 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: python-demo
+  namespace: python-observability-demo
+  labels:
+    app.kubernetes.io/name: python-demo
+    app.kubernetes.io/part-of: python-observability-lab
+spec:
+  lookupPolicy:
+    local: false

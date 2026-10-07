@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-demo
+  namespace: python-observability-demo
+  labels:
+    app: python-demo
+    app.kubernetes.io/name: python-demo
+    app.kubernetes.io/part-of: python-observability-lab
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"python-demo:latest","namespace":"python-observability-demo"},"fieldPath":"spec.template.spec.containers[?(@.name==\"python-demo\")].image","paused":false}]'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-demo
+  template:
+    metadata:
+      labels:
+        app: python-demo
+        app.kubernetes.io/name: python-demo
+        app.kubernetes.io/part-of: python-observability-lab
+    spec:
+      containers:
+        - name: python-demo
+          image: image-registry.openshift-image-registry.svc:5000/python-observability-demo/python-demo:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: python-demo
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: http/protobuf
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.observability.svc.cluster.local:4318"
+            - name: OTEL_PROPAGATORS
+              value: tracecontext,baggage
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.namespace=python-observability-demo,deployment.environment=eval
+            - name: OTEL_PYTHON_LOG_LEVEL
+              value: info
+
+          # Aponta para os endpoints definidos na aplicação FastAPI (/ ou /health se houver)
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      terminationGracePeriodSeconds: 30

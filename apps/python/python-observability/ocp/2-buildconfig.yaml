@@ -1,0 +1,23 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: python-demo
+  namespace: python-observability-demo
+  labels:
+    app.kubernetes.io/name: python-demo
+    app.kubernetes.io/part-of: python-observability-lab
+spec:
+  runPolicy: Serial
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile
+      forcePull: true
+  output:
+    to:
+      kind: ImageStreamTag
+      name: python-demo:latest
+  triggers: []

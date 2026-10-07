@@ -8,26 +8,24 @@
     - "{{ playbook_dir }}/../group_vars/all/vault.yml"
 
   vars:
+    # -----------------------------------------------------------------------
+    # Resource names used by the current lab manifests.
+    # -----------------------------------------------------------------------
     minio_deployment_name: minio
-    minio_pvc_name: minio-data
+    minio_service_name: minio
     minio_bucket_job_name: create-tempo-bucket
     minio_legacy_bucket_job_name: minio-create-tempo-bucket
 
     otel_collector_deployment_name: otel-collector
 
-    # Aplicação PHP
     php_buildconfig_name: php-demo
     php_deployment_name: php-demo
     php_route_name: php-demo
 
-    # Aplicação Python
-    python_namespace: python-observability-demo
-    python_buildconfig_name: python-demo
-    python_deployment_name: python-demo
-    python_route_name: python-demo
-
+    # Tempo -> MinIO endpoint.
     minio_endpoint: "http://minio.minio.svc.cluster.local:9000"
 
+    # Operator readiness polling.
     operator_wait_retries: 90
     operator_wait_delay: 5
 
@@ -37,7 +35,6 @@
         that:
           - repo_root is defined
           - php_namespace is defined
-          - python_namespace is defined
           - observability_namespace is defined
           - tempo_namespace is defined
           - minio_namespace is defined
@@ -57,8 +54,8 @@
           - vault_minio_root_user != 'CHANGE_ME'
           - vault_minio_root_password != 'CHANGE_ME'
         fail_msg: >-
-          Required variables were not loaded or the MinIO credentials in
-          Ansible Vault still contain placeholder values.
+          Required variables were not loaded or the Vault still contains
+          placeholder credentials.
         success_msg: "Required variables and Vault credentials loaded successfully."
 
     - name: Validate access to the current OpenShift/Kubernetes context
@@ -258,44 +255,15 @@
       tags:
         - minio
 
-    - name: Create MinIO PVC
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ repo_root }}/infra/minio/1-pvc.yaml"
-      tags:
-        - minio
-
-    - name: Deploy MinIO Deployment
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ repo_root }}/infra/minio/2-deployment.yaml"
-      tags:
-        - minio
-
-    - name: Deploy MinIO Service and Route
+    - name: Deploy MinIO PVC, Deployment, Service and Route
       kubernetes.core.k8s:
         state: present
         src: "{{ item }}"
       loop:
+        - "{{ repo_root }}/infra/minio/1-pvc.yaml"
+        - "{{ repo_root }}/infra/minio/2-deployment.yaml"
         - "{{ repo_root }}/infra/minio/3-service.yaml"
         - "{{ repo_root }}/infra/minio/4-console-route.yaml"
-      tags:
-        - minio
-
-    - name: Wait for MinIO PVC to become Bound
-      ansible.builtin.shell:
-        cmd: |
-          phase="$(oc get pvc {{ minio_pvc_name }} \
-            -n {{ minio_namespace }} \
-            -o jsonpath='{.status.phase}')"
-          echo "${phase}"
-          test "${phase}" = "Bound"
-        executable: /bin/bash
-      register: minio_pvc_status
-      changed_when: false
-      retries: 60
-      delay: 5
-      until: minio_pvc_status.rc == 0
       tags:
         - minio
 
@@ -328,10 +296,65 @@
       tags:
         - minio
 
-    - name: Create Tempo bucket
+    - name: Create Tempo bucket in MinIO
       kubernetes.core.k8s:
         state: present
-        src: "{{ repo_root }}/infra/minio/5-create-tempo-bucket-job.yaml"
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "{{ minio_bucket_job_name }}"
+            namespace: "{{ minio_namespace }}"
+            labels:
+              app.kubernetes.io/name: minio-bucket-init
+              app.kubernetes.io/part-of: php-observability-lab
+          spec:
+            backoffLimit: 3
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: minio-bucket-init
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: mc
+                    image: quay.io/minio/mc:latest
+                    env:
+                      - name: MINIO_ROOT_USER
+                        valueFrom:
+                          secretKeyRef:
+                            name: "{{ minio_root_secret_name }}"
+                            key: MINIO_ROOT_USER
+                      - name: MINIO_ROOT_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: "{{ minio_root_secret_name }}"
+                            key: MINIO_ROOT_PASSWORD
+                      - name: TEMPO_BUCKET
+                        value: "{{ tempo_bucket_name }}"
+                    command:
+                      - /bin/sh
+                      - -ec
+                      - |
+                        MC_CONFIG_DIR="/tmp/mc"
+
+                        echo "Configuring MinIO alias..."
+
+                        mc --config-dir "${MC_CONFIG_DIR}" alias set lab \
+                          http://minio.minio.svc.cluster.local:9000 \
+                          "${MINIO_ROOT_USER}" \
+                          "${MINIO_ROOT_PASSWORD}"
+
+                        echo "Creating Tempo bucket if necessary..."
+
+                        mc --config-dir "${MC_CONFIG_DIR}" \
+                          mb --ignore-existing \
+                          "lab/${TEMPO_BUCKET}"
+
+                        echo "Available buckets:"
+
+                        mc --config-dir "${MC_CONFIG_DIR}" \
+                          ls lab
       tags:
         - minio
 
@@ -499,7 +522,7 @@
         - opentelemetry
 
     # =======================================================================
-    # 6.1 PHP APPLICATION + BINARY BUILD
+    # 6. PHP APPLICATION + BINARY BUILD
     # =======================================================================
     - name: Create PHP application namespace
       kubernetes.core.k8s:
@@ -507,7 +530,6 @@
         src: "{{ repo_root }}/apps/php/observability-app/ocp/0-namespace.yaml"
       tags:
         - application
-        - php
 
     - name: Create PHP ImageStream and BuildConfig
       kubernetes.core.k8s:
@@ -518,7 +540,6 @@
         - "{{ repo_root }}/apps/php/observability-app/ocp/2-buildconfig.yaml"
       tags:
         - application
-        - php
         - build
 
     - name: Start PHP binary build
@@ -533,7 +554,6 @@
       changed_when: true
       tags:
         - application
-        - php
         - build
 
     - name: Deploy PHP application
@@ -546,7 +566,6 @@
         - "{{ repo_root }}/apps/php/observability-app/ocp/5-route.yaml"
       tags:
         - application
-        - php
 
     - name: Wait for PHP application Deployment
       ansible.builtin.command:
@@ -561,72 +580,6 @@
       until: php_rollout.rc == 0
       tags:
         - application
-        - php
-
-# =======================================================================
-    # 6.2 PYTHON APPLICATION + BINARY BUILD
-    # =======================================================================
-    - name: Create Python application namespace
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ repo_root }}/apps/python/python-observability/ocp/0-namespace.yaml"
-      tags:
-        - application
-        - python
-
-    - name: Create Python ImageStream and BuildConfig
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ item }}"
-      loop:
-        - "{{ repo_root }}/apps/python/python-observability/ocp/1-imagestream.yaml"
-        - "{{ repo_root }}/apps/python/python-observability/ocp/2-buildconfig.yaml"
-      tags:
-        - application
-        - python
-        - build
-
-    - name: Start Python binary build
-      ansible.builtin.command:
-        cmd: >-
-          oc start-build {{ python_buildconfig_name }}
-          -n {{ python_namespace }}
-          --from-dir={{ repo_root }}/apps/python/python-observability
-          --follow
-          --wait
-      register: python_build
-      changed_when: true
-      tags:
-        - application
-        - python
-        - build
-
-    - name: Deploy Python application
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ item }}"
-      loop:
-        - "{{ repo_root }}/apps/python/python-observability/ocp/3-deployment.yaml"
-        - "{{ repo_root }}/apps/python/python-observability/ocp/4-service.yaml"
-        - "{{ repo_root }}/apps/python/python-observability/ocp/5-route.yaml"
-      tags:
-        - application
-        - python
-
-    - name: Wait for Python application Deployment
-      ansible.builtin.command:
-        cmd: >-
-          oc rollout status deployment/{{ python_deployment_name }}
-          -n {{ python_namespace }}
-          --timeout=300s
-      register: python_rollout
-      changed_when: false
-      retries: 6
-      delay: 10
-      until: python_rollout.rc == 0
-      tags:
-        - application
-        - python
 
     # =======================================================================
     # 7. CLUSTER OBSERVABILITY / DISTRIBUTED TRACING UI
@@ -668,23 +621,7 @@
       tags:
         - test
 
-    - name: Obtain Python application Route
-      ansible.builtin.command:
-        cmd: >-
-          oc get route {{ python_route_name }}
-          -n {{ python_namespace }}
-          -o jsonpath=https://{.spec.host}
-      register: python_route
-      changed_when: false
-      retries: 20
-      delay: 3
-      until:
-        - python_route.rc == 0
-        - python_route.stdout | length > 0
-      tags:
-        - test
-
-    - name: Generate PHP application spans
+    - name: Generate application spans
       ansible.builtin.uri:
         url: "{{ php_route.stdout }}{{ item.path }}"
         method: GET
@@ -698,25 +635,7 @@
           status: 200
         - path: /error
           status: 500
-      register: php_span_requests
-      tags:
-        - test
-
-    - name: Generate Python application spans
-      ansible.builtin.uri:
-        url: "{{ python_route.stdout }}{{ item.path }}"
-        method: GET
-        validate_certs: false
-        status_code: "{{ item.status }}"
-        return_content: false
-      loop:
-        - path: /
-          status: 200
-        - path: /processar-pedido/100
-          status: 200
-        - path: /processar-pedido/0
-          status: 400
-      register: python_span_requests
+      register: span_requests
       tags:
         - test
 
@@ -731,8 +650,8 @@
       retries: 12
       delay: 5
       until:
+        - "'GET /slow' in collector_logs.stdout"
         - "'php-demo' in collector_logs.stdout"
-        - "'python-demo' in collector_logs.stdout"
       tags:
         - test
 
@@ -770,7 +689,6 @@
 
           echo
           echo "=== MinIO ==="
-          oc get pvc {{ minio_pvc_name }} -n {{ minio_namespace }}
           oc get pods -n {{ minio_namespace }}
           oc get job {{ minio_bucket_job_name }} -n {{ minio_namespace }}
 
@@ -785,14 +703,9 @@
           oc get pods -n {{ observability_namespace }}
 
           echo
-          echo "=== PHP Application ==="
+          echo "=== Application ==="
           oc get pods -n {{ php_namespace }}
           oc get route {{ php_route_name }} -n {{ php_namespace }}
-
-          echo
-          echo "=== Python Application ==="
-          oc get pods -n {{ python_namespace }}
-          oc get route {{ python_route_name }} -n {{ python_namespace }}
 
           echo
           echo "=== COO UIPlugin ==="
@@ -809,10 +722,9 @@
       ansible.builtin.debug:
         msg:
           - "Lab provisioning completed successfully."
-          - "PHP Application: {{ php_route.stdout }}"
-          - "Python Application: {{ python_route.stdout }}"
-          - "Test spans generated for both applications."
+          - "Application: {{ php_route.stdout }}"
+          - "Test spans generated for /users, /slow and /error."
           - "OpenShift Console: Observe -> Traces"
           - "Tempo instance: {{ tempo_namespace }} / {{ tempo_stack_name }}"
           - "Tenant: {{ tempo_tenant_name }}"
-          - "Services: php-demo, python-demo"
+          - "Filter by Service Name: php-demo"

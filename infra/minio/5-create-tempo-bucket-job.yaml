@@ -3,19 +3,25 @@ kind: Job
 metadata:
   name: create-tempo-bucket
   namespace: minio
+  labels:
+    app.kubernetes.io/name: minio-bucket-init
+    app.kubernetes.io/part-of: php-observability-lab
+
 spec:
   backoffLimit: 3
 
   template:
     metadata:
       labels:
-        app: create-tempo-bucket
+        app.kubernetes.io/name: minio-bucket-init
+
     spec:
       restartPolicy: Never
 
       containers:
         - name: mc
-          image: quay.io/minio/mc:latest
+          image: quay.io/rh-ee-imesquit/minio-community:latest
+          imagePullPolicy: IfNotPresent
 
           env:
             - name: MINIO_ROOT_USER
@@ -30,22 +36,33 @@ spec:
                   name: minio-root-credentials
                   key: MINIO_ROOT_PASSWORD
 
+            - name: TEMPO_BUCKET
+              value: tempo
+
           command:
             - /bin/sh
             - -ec
             - |
-              echo "Configurando conexão com MinIO..."
+              MC_CONFIG_DIR="/tmp/mc"
 
-              mc alias set lab \
+              echo "Configuring MinIO alias..."
+
+              /usr/local/bin/mc \
+                --config-dir "${MC_CONFIG_DIR}" \
+                alias set lab \
                 http://minio.minio.svc.cluster.local:9000 \
                 "${MINIO_ROOT_USER}" \
                 "${MINIO_ROOT_PASSWORD}"
 
-              echo "Criando bucket tempo..."
+              echo "Creating Tempo bucket if necessary..."
 
-              mc mb \
-                --ignore-existing \
-                lab/tempo
+              /usr/local/bin/mc \
+                --config-dir "${MC_CONFIG_DIR}" \
+                mb --ignore-existing \
+                "lab/${TEMPO_BUCKET}"
 
-              echo "Buckets existentes:"
-              mc ls lab
+              echo "Available buckets:"
+
+              /usr/local/bin/mc \
+                --config-dir "${MC_CONFIG_DIR}" \
+                ls lab

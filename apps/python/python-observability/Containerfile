@@ -1,0 +1,21 @@
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+WORKDIR /app
+
+# Copia e instala as dependências
+COPY --chown=1001:0 requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Instala as bibliotecas de auto-instrumentação no ambiente Python
+RUN opentelemetry-bootstrap -a install
+
+# Copia o código da aplicação mantendo a estrutura de pacotes
+COPY --chown=1001:0 app/ ./app/
+
+# Ajuste de permissões para compatibilidade com o SCC (User ID aleatório) do OpenShift
+RUN chmod -R g=u /app
+
+EXPOSE 8080
+
+# Inicia a aplicação indicando o módulo app.main
+CMD ["opentelemetry-instrument", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

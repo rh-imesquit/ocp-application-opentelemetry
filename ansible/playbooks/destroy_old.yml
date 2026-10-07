@@ -7,16 +7,12 @@
     - "{{ playbook_dir }}/../group_vars/all/vars.yml"
     - "{{ playbook_dir }}/../group_vars/all/vault.yml"
 
-  vars:
-    python_namespace: python-observability-demo
-
   pre_tasks:
     - name: Validate required variables
       ansible.builtin.assert:
         that:
           - manifests is defined
           - php_namespace is defined
-          - python_namespace is defined
           - observability_namespace is defined
           - tempo_namespace is defined
           - minio_namespace is defined
@@ -36,16 +32,13 @@
           {{ cluster_info.connection.host | default('current kubeconfig context') }}
 
   tasks:
-    # =======================================================================
-    # 1. REMOVE PHP APPLICATION
-    # =======================================================================
     - name: Remove PHP application resources
       kubernetes.core.k8s:
         state: absent
         src: "{{ item }}"
         wait: true
         wait_timeout: 120
-      loop: "{{ manifests.app | default([]) }}"
+      loop: "{{ manifests.app }}"
       ignore_errors: true
 
     - name: Remove PHP application namespace
@@ -58,36 +51,6 @@
         wait_timeout: 180
       ignore_errors: true
 
-# =======================================================================
-    # 2. REMOVE PYTHON APPLICATION
-    # =======================================================================
-    - name: Remove Python application resources
-      kubernetes.core.k8s:
-        state: absent
-        src: "{{ item }}"
-        wait: true
-        wait_timeout: 120
-      loop:
-        - "{{ repo_root }}/apps/python/python-observability/ocp/5-route.yaml"
-        - "{{ repo_root }}/apps/python/python-observability/ocp/4-service.yaml"
-        - "{{ repo_root }}/apps/python/python-observability/ocp/3-deployment.yaml"
-        - "{{ repo_root }}/apps/python/python-observability/ocp/2-buildconfig.yaml"
-        - "{{ repo_root }}/apps/python/python-observability/ocp/1-imagestream.yaml"
-      ignore_errors: true
-
-    - name: Remove Python application namespace
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Namespace
-        name: "{{ python_namespace }}"
-        state: absent
-        wait: true
-        wait_timeout: 180
-      ignore_errors: true
-
-    # =======================================================================
-    # 3. REMOVE OBSERVABILITY PIPELINE & INFRA
-    # =======================================================================
     - name: Remove Distributed Tracing UIPlugin
       kubernetes.core.k8s:
         state: absent
@@ -154,9 +117,6 @@
         wait_timeout: 240
       ignore_errors: true
 
-    # =======================================================================
-    # 4. REMOVE OPERATORS & MONITORING CONFIG (OPTIONAL)
-    # =======================================================================
     - name: Remove Cluster Observability Operator resources
       kubernetes.core.k8s:
         state: absent
@@ -236,7 +196,6 @@
         cmd: >
           oc get namespace
           {{ php_namespace }}
-          {{ python_namespace }}
           {{ observability_namespace }}
           {{ tempo_namespace }}
           {{ minio_namespace }}

@@ -1,0 +1,20 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: python-demo
+  namespace: python-observability-demo
+  labels:
+    app: python-demo
+    app.kubernetes.io/name: python-demo
+    app.kubernetes.io/part-of: python-observability-lab
+spec:
+  to:
+    kind: Service
+    name: python-demo
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
